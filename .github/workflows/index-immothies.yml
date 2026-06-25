@@ -37,12 +37,17 @@ jobs:
         run: npm install
 
       - name: Setup Google Credentials
-        run: echo '${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}' > google-credentials.json
+        run: |
+          # Nettoyer le JSON et sauvegarder dans un fichier
+          echo "$GOOGLE_SERVICE_ACCOUNT_JSON" | tr -d '\r' > google-credentials.json
+          echo "✅ Credentials configures"
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
 
       - name: Run Indexing
         env:
-          GOOGLE_SERVICE_ACCOUNT_JSON: '${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}'
-          INDEXNOW_KEY: '${{ secrets.INDEXNOW_KEY }}'
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          INDEXNOW_KEY: ${{ secrets.INDEXNOW_KEY }}
         run: node src/indexer.js
 
       - name: Upload Reports
