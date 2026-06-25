@@ -1,0 +1,351 @@
+# Workflow GitHub Actions pour immothies-dakar.com
+# Automatise complètement l'indexation sur Google et Bing
+
+name: 🚀 Index immothies-dakar.com
+
+on:
+  # Exécution manuelle avec options
+  workflow_dispatch:
+    inputs:
+      indexing_mode:
+        description: 'Mode d\'indexation'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - priority_only
+          - google_only
+          - bing_only
+      custom_urls:
+        description: 'URLs personnalisées (séparées par des virgules)'
+        required: false
+        default: ''
+
+  # Exécution automatique quotidienne à 6h UTC
+  schedule:
+    - cron: '0 6 * * *'
+
+  # Exécution automatique après push sur main
+  push:
+    branches: [main]
+
+  # Exécution sur pull request (test uniquement)
+  pull_request:
+    branches: [main]
+
+env:
+  NODE_VERSION: '20'
+  SITE_URL: 'https://immothies-dakar.com'
+
+jobs:
+  # Job 1: Vérification et préparation
+  prepare:
+    name: 🔍 Préparation
+    runs-on: ubuntu-latest
+    outputs:
+      urls_count: ${{ steps.urls.outputs.count }}
+      should_index: ${{ steps.decide.outputs.should_index }}
+
+    steps:
+      - name: 📥 Checkout du code
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📦 Installation des dépendances
+        run: |
+          npm ci
+          npm ls
+
+      - name: 🔍 Récupération des URLs
+        id: urls
+        run: |
+          node -e "
+            const SitemapFetcher = require('./src/SitemapFetcher');
+            const fetcher = new SitemapFetcher(process.env.SITE_URL);
+
+            fetcher.fetchAllUrls().then(urls => {
+              console.log('::set-output name=count::' + urls.length);
+              require('fs').writeFileSync('urls-to-index.json', JSON.stringify(urls, null, 2));
+              console.log('✅', urls.length, 'URLs récupérées');
+            }).catch(err => {
+              console.error('❌ Erreur:', err.message);
+              process.exit(1);
+            });
+          "
+
+      - name: 📤 Upload URLs
+        uses: actions/upload-artifact@v4
+        with:
+          name: urls-to-index
+          path: urls-to-index.json
+
+      - name: 🤔 Décision d'indexation
+        id: decide
+        run: |
+          if [ "${{ github.event_name }}" == "schedule" ] && [ "${{ steps.urls.outputs.count }}" -eq "0" ]; then
+            echo "should_index=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Aucune URL à indexer"
+          else
+            echo "should_index=true" >> $GITHUB_OUTPUT
+            echo "✅ Prêt à indexer"
+          fi
+
+  # Job 2: Indexation Google
+  index-google:
+    name: 🔍 Indexation Google
+    needs: prepare
+    runs-on: ubuntu-latest
+    if: needs.prepare.outputs.should_index == 'true' && github.event.inputs.indexing_mode != 'bing_only'
+    continue-on-error: true
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 📦 Installation
+        run: npm ci
+
+      - name: ⬇️ Download URLs
+        uses: actions/download-artifact@v4
+        with:
+          name: urls-to-index
+
+      - name: 🔐 Setup Google Credentials
+        run: |
+          echo '${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}' > google-credentials.json
+          echo "✅ Credentials configurés"
+
+      - name: 🚀 Indexation Google
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          INDEXING_MODE: ${{ github.event.inputs.indexing_mode || 'full' }}
+        run: |
+          node -e "
+            const Indexer = require('./src/indexer');
+            const fs = require('fs');
+
+            const urls = JSON.parse(fs.readFileSync('urls-to-index.json', 'utf8'));
+            console.log('📊', urls.length, 'URLs à indexer sur Google');
+
+            const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+            const indexer = new Indexer({ site: process.env.SITE_URL });
+
+            indexer.initialize(credentials, null).then(() => {
+              const options = {
+                priorityOnly: process.env.INDEXING_MODE === 'priority_only',
+                skipIndexNow: true
+              };
+              return indexer.indexAllPages(options);
+            }).then(report => {
+              fs.writeFileSync('google-report.json', JSON.stringify(report, null, 2));
+              console.log('✅ Indexation Google terminée');
+            }).catch(err => {
+              console.error('❌ Erreur:', err);
+              process.exit(1);
+            });
+          "
+
+      - name: 📤 Upload Rapport Google
+        uses: actions/upload-artifact@v4
+        with:
+          name: google-indexing-report
+          path: google-report.json
+
+  # Job 3: Indexation IndexNow (Bing/Yandex)
+  index-bing:
+    name: 🎯 Indexation Bing/Yandex
+    needs: prepare
+    runs-on: ubuntu-latest
+    if: needs.prepare.outputs.should_index == 'true' && github.event.inputs.indexing_mode != 'google_only'
+    continue-on-error: true
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 📦 Installation
+        run: npm ci
+
+      - name: ⬇️ Download URLs
+        uses: actions/download-artifact@v4
+        with:
+          name: urls-to-index
+
+      - name: 🚀 Indexation IndexNow
+        env:
+          INDEXNOW_KEY: ${{ secrets.INDEXNOW_KEY }}
+          INDEXING_MODE: ${{ github.event.inputs.indexing_mode || 'full' }}
+        run: |
+          node -e "
+            const IndexNow = require('./src/IndexNow');
+            const fs = require('fs');
+
+            const urls = JSON.parse(fs.readFileSync('urls-to-index.json', 'utf8'));
+            const limitedUrls = urls.slice(0, 10000); // Limite IndexNow
+
+            console.log('📊', limitedUrls.length, 'URLs à indexer via IndexNow');
+
+            const indexer = new IndexNow({
+              host: 'immothies-dakar.com',
+              key: process.env.INDEXNOW_KEY
+            });
+
+            indexer.submit(limitedUrls).then(results => {
+              fs.writeFileSync('indexnow-report.json', JSON.stringify(results, null, 2));
+              console.log('✅ Indexation IndexNow terminée');
+              results.forEach(r => console.log(r.engine + ':', r.status));
+            }).catch(err => {
+              console.error('❌ Erreur:', err);
+            });
+          "
+
+      - name: 📤 Upload Rapport IndexNow
+        uses: actions/upload-artifact@v4
+        with:
+          name: indexnow-report
+          path: indexnow-report.json
+
+  # Job 4: Indexation URLs personnalisées
+  index-custom:
+    name: 🔗 Indexation URLs personnalisées
+    runs-on: ubuntu-latest
+    if: github.event.inputs.custom_urls != ''
+    continue-on-error: true
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 📦 Installation
+        run: npm ci
+
+      - name: 🚀 Indexation URLs personnalisées
+        env:
+          CUSTOM_URLS: ${{ github.event.inputs.custom_urls }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          INDEXNOW_KEY: ${{ secrets.INDEXNOW_KEY }}
+        run: |
+          node -e "
+            const urls = process.env.CUSTOM_URLS.split(',').map(u => u.trim());
+            console.log('📌', urls.length, 'URLs personnalisées à indexer');
+
+            // Indexation Google
+            if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+              const GoogleIndexer = require('./src/GoogleIndexer');
+              const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+              const google = new GoogleIndexer(credentials);
+
+              google.authenticate().then(() => {
+                return google.indexBatch(urls);
+              }).then(results => {
+                console.log('✅ Google:', results.filter(r => r.success).length, 'indexées');
+              });
+            }
+
+            // Indexation IndexNow
+            if (process.env.INDEXNOW_KEY) {
+              const IndexNow = require('./src/IndexNow');
+              const indexnow = new IndexNow({
+                host: 'immothies-dakar.com',
+                key: process.env.INDEXNOW_KEY
+              });
+
+              indexnow.submit(urls).then(results => {
+                console.log('✅ IndexNow:', results.map(r => r.engine + ': ' + r.status).join(', '));
+              });
+            }
+          "
+
+  # Job 5: Rapport final
+  report:
+    name: 📊 Rapport Final
+    needs: [index-google, index-bing]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 📥 Download tous les rapports
+        uses: actions/download-artifact@v4
+
+      - name: 📋 Génération résumé
+        run: |
+          echo "# 📊 Rapport d'Indexation immothies-dakar.com" > summary.md
+          echo "" >> summary.md
+          echo "**Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> summary.md
+          echo "" >> summary.md
+
+          if [ -f "google-report.json" ]; then
+            echo "## 🔍 Google Indexing API" >> summary.md
+            echo "✅ Rapport disponible dans l'artefact 'google-indexing-report'" >> summary.md
+            echo "" >> summary.md
+          fi
+
+          if [ -f "indexnow-report.json" ]; then
+            echo "## 🎯 IndexNow (Bing/Yandex)" >> summary.md
+            echo "✅ Rapport disponible dans l'artefact 'indexnow-report'" >> summary.md
+            echo "" >> summary.md
+          fi
+
+          echo "## 📁 Artefacts disponibles" >> summary.md
+          echo "- urls-to-index: Liste des URLs du site" >> summary.md
+          echo "- google-indexing-report: Rapport détaillé Google" >> summary.md
+          echo "- indexnow-report: Rapport IndexNow" >> summary.md
+
+          cat summary.md
+
+      - name: 💾 Sauvegarde du résumé
+        uses: actions/upload-artifact@v4
+        with:
+          name: indexing-summary
+          path: summary.md
+
+  # Job 6: Notification (optionnel)
+  notify:
+    name: 🔔 Notification
+    needs: report
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: 📝 Résumé final
+        run: |
+          echo "✅ Workflow d'indexation terminé!"
+          echo ""
+          echo "📊 Vérifiez les artefacts pour les rapports détaillés:"
+          echo "   - google-indexing-report"
+          echo "   - indexnow-report"
+          echo "   - indexing-summary"
+
+      # Notification Discord (optionnel)
+      - name: 📢 Notification Discord
+        if: secrets.DISCORD_WEBHOOK_URL != ''
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          curl -H "Content-Type: application/json" \
+            -d '{"content":"🚀 Indexation immothies-dakar.com terminée!\n📊 Voir les rapports dans les artefacts GitHub."}' \
+            "$DISCORD_WEBHOOK" || true

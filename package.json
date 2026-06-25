@@ -1,0 +1,27 @@
+{
+  "name": "immothies-dakar-auto-indexer",
+  "version": "1.0.0",
+  "description": "Automatisation complète de l'indexation Google pour immothies-dakar.com",
+  "main": "index.js",
+  "scripts": {
+    "index": "node src/indexer.js",
+    "index:google": "node src/google-indexer.js",
+    "index:bing": "node src/bing-indexer.js",
+    "sitemap:fetch": "node src/fetch-sitemap.js",
+    "report": "node src/generate-report.js",
+    "test": "node src/test.js"
+  },
+  "keywords": ["seo", "indexing", "google", "bing", "sitemap", "immothies"],
+  "author": "SR Voyages",
+  "license": "MIT",
+  "dependencies": {
+    "googleapis": "^128.0.0",
+    "axios": "^1.6.0",
+    "xml2js": "^0.6.2",
+    "node-fetch": "^3.3.2",
+    "dotenv": "^16.3.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

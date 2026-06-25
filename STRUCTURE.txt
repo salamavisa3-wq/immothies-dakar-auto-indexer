@@ -1,0 +1,17 @@
+﻿immothies-dakar-auto-indexer/
+├── .github/
+│   └── workflows/
+│       └── index-immothies.yml       # Workflow GitHub Actions
+├── src/
+│   ├── indexer.js                    # Script principal
+│   ├── GoogleIndexer.js              # Module Google API
+│   ├── IndexNow.js                   # Module IndexNow
+│   ├── SitemapFetcher.js             # Parser sitemaps
+│   └── ReportGenerator.js            # Générateur rapports
+├── reports/                          # Rapports générés
+├── package.json                      # Dépendances Node.js
+├── setup.js                          # Script de configuration
+├── .env.example                      # Template variables
+├── .gitignore                        # Fichiers ignorés
+├── LICENSE                           # Licence MIT
+└── README.md                         # Documentation
