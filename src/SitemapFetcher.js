@@ -8,69 +8,96 @@ const xml2js = require('xml2js');
 class SitemapFetcher {
   constructor(baseUrl = 'https://immothies-dakar.com') {
     this.baseUrl = baseUrl;
-    this.sitemapUrl = `${baseUrl}/sitemap_index.xml`;
+    this.sitemapUrls = [
+      `${baseUrl}/sitemap_index.xml`,
+      `${baseUrl}/sitemap.xml`
+    ];
   }
 
-  /**
-   * Récupère le contenu XML d'une URL
-   */
-  async fetchXml(url) {
-    try {
-      const response = await axios.get(url, {
-        timeout: 30000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; IndexerBot/1.0)'
+  async fetchXml(url, retries = 3) {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        const response = await axios.get(url, {
+          timeout: 30000,
+          responseType: 'text',
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/xml, text/xml, */*'
+          }
+        });
+        let data = typeof response.data === 'string' ? response.data : String(response.data);
+        // Strip BOM
+        data = data.replace(/^﻿/, '');
+        // Strip any content before the first XML tag (PHP notices, whitespace)
+        const xmlStart = data.indexOf('<?xml');
+        if (xmlStart > 0) {
+          console.warn(`⚠️ ${data.substring(0, xmlStart).length} caractères non-XML ignorés avant <?xml`);
+          data = data.substring(xmlStart);
+        } else if (xmlStart === -1) {
+          const tagStart = data.indexOf('<');
+          if (tagStart > 0) {
+            data = data.substring(tagStart);
+          } else if (tagStart === -1) {
+            throw new Error(`Réponse non-XML de ${url} (début: ${data.substring(0, 80)})`);
+          }
         }
-      });
-      return response.data;
-    } catch (error) {
-      throw new Error(`Impossible de récupérer ${url}: ${error.message}`);
+        return data;
+      } catch (error) {
+        if (attempt < retries) {
+          const delay = attempt * 2000;
+          console.warn(`⚠️ Tentative ${attempt}/${retries} échouée pour ${url}, retry dans ${delay/1000}s...`);
+          await new Promise(r => setTimeout(r, delay));
+        } else {
+          throw new Error(`Impossible de récupérer ${url} après ${retries} tentatives: ${error.message}`);
+        }
+      }
     }
   }
 
-  /**
-   * Parse un XML de sitemap
-   */
   async parseXml(xml) {
     const parser = new xml2js.Parser({ explicitArray: false });
     return await parser.parseStringPromise(xml);
   }
 
-  /**
-   * Récupère tous les sitemaps depuis l'index
-   */
   async fetchAllSitemaps() {
     console.log('🔍 Récupération des sitemaps...\n');
 
-    try {
-      const xml = await this.fetchXml(this.sitemapUrl);
-      const parsed = await this.parseXml(xml);
+    for (const sitemapUrl of this.sitemapUrls) {
+      try {
+        console.log(`📡 Essai: ${sitemapUrl}`);
+        const xml = await this.fetchXml(sitemapUrl);
+        const parsed = await this.parseXml(xml);
 
-      const sitemaps = [];
+        const sitemaps = [];
 
-      // Gestion du sitemap index
-      if (parsed.sitemapindex && parsed.sitemapindex.sitemap) {
-        const sitemapList = Array.isArray(parsed.sitemapindex.sitemap)
-          ? parsed.sitemapindex.sitemap
-          : [parsed.sitemapindex.sitemap];
+        if (parsed.sitemapindex && parsed.sitemapindex.sitemap) {
+          const sitemapList = Array.isArray(parsed.sitemapindex.sitemap)
+            ? parsed.sitemapindex.sitemap
+            : [parsed.sitemapindex.sitemap];
 
-        for (const sitemap of sitemapList) {
-          sitemaps.push({
-            url: sitemap.loc,
-            lastmod: sitemap.lastmod
-          });
+          for (const sitemap of sitemapList) {
+            sitemaps.push({
+              url: sitemap.loc,
+              lastmod: sitemap.lastmod
+            });
+          }
         }
+
+        if (sitemaps.length > 0) {
+          console.log(`✅ ${sitemaps.length} sitemaps trouvés:\n`);
+          sitemaps.forEach((s, i) => console.log(`   ${i + 1}. ${s.url}`));
+          console.log();
+          return sitemaps;
+        }
+
+        console.warn(`⚠️ Aucun sitemap dans ${sitemapUrl}, essai suivant...`);
+      } catch (error) {
+        console.error(`❌ Erreur ${sitemapUrl}: ${error.message}`);
       }
-
-      console.log(`✅ ${sitemaps.length} sitemaps trouvés:\n`);
-      sitemaps.forEach((s, i) => console.log(`   ${i + 1}. ${s.url}`));
-      console.log();
-
-      return sitemaps;
-    } catch (error) {
-      console.error('❌ Erreur:', error.message);
-      return [];
     }
+
+    console.error('❌ Aucun sitemap index accessible');
+    return [];
   }
 
   /**
@@ -78,7 +105,7 @@ class SitemapFetcher {
    */
   async fetchUrlsFromSitemap(sitemapUrl) {
     try {
-      const xml = await this.fetchXml(sitemapUrl);
+      const xml = await this.fetchXml(sitemapUrl, 2);
       const parsed = await this.parseXml(xml);
 
       const urls = [];
